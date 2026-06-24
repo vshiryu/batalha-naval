@@ -1,0 +1,122 @@
+# TEST_REPORT — Batalha Naval
+
+**Veredito final: PASS ✅** — LOOP A (motor, headless) e LOOP B (navegador real) verdes.
+Zero erros de console/WebSocket. Anti-trapaça verificada em duas camadas.
+
+---
+
+## LOOP A — Simulação do motor (headless, exaustivo)
+
+Rodado pelo agente principal (camada mais sensível a contrato de dados). Comandos:
+`npm test`, `npm run test:anticheat`, `npm run test:server` (ou `npm run test:all`).
+
+| Suíte | Asserções | Resultado | Cobertura |
+|---|---:|:--:|---|
+| `engine-sim.js` | **356** | PASS | Partida COMPLETA até a vitória exercitando **todos** os power-ups; valida economia de energia contra um rastreador independente |
+| `anticheat.test.js` | **22.000+** | PASS | 50 partidas aleatórias; a cada ação, varre o payload dos dois clientes |
+| `server-flow.js` | **37** | PASS | Fluxo Socket.IO ponta a ponta (atribuição, espectador, turnos, anti-trapaça na rede, reconexão, revanche) |
+
+Comportamentos asseverados com valores exatos:
+- **Energia**: início 0; **+1** no começo de cada turno do jogador; **+2** ao afundar — conferido turno a turno por um rastreador independente ao longo de uma partida inteira.
+- **Custos** respeitados e ações sem energia rejeitadas (`insufficient_energy`).
+- **Sonar** (2): revela navios numa 3×3 **sem causar dano** (tabuleiro inimigo intacto; descoberta permanente não acontece).
+- **Salva Tripla** (3): exatamente **3 tiros** resolvidos num único turno.
+- **Torpedo** (4): atinge a **primeira** célula com navio na linha/direção; **erra** (impact null) quando não há navio.
+- **Bombardeio** (4): resolve as **9 células** da área 3×3.
+- **Reparo** (4): restaura uma célula atingida de um navio próprio não afundado; o oponente **perde** o acerto confirmado (reverte para "desconhecido").
+- **Vitória** ao afundar a frota inteira; nenhuma ação aceita após o fim.
+- **Turnos**: ação fora da vez rejeitada (`not_your_turn`); célula repetida rejeitada.
+
+### Anti-trapaça (nível servidor)
+Para todo `publicStateFor(slot)`: `enemy.fleet/ships/grid` **ausentes**; a `view` só contém
+células efetivamente descobertas; **nenhuma** célula de navio não-descoberta vaza; o tipo do
+navio só é revelado **ao afundar** (acerto que não afunda não revela o tipo). Varredura
+profunda do JSON confirma que a lista de células da frota inimiga nunca aparece no payload.
+
+---
+
+## LOOP B — Navegador real (delegado a subagente de QA, skill `webtest`)
+
+Viewport de celular **390×844**, Chrome headless com **WebGL por software** (SwiftShader).
+Jogador 1 dirigido pela `webtest`; Jogador 2 por cliente Socket.IO scriptado
+(`scripts/bot.js`, com watchdog de anti-trapaça embutido). Partida determinística de
+vitória via `--fixed` (o driver conhece o layout pelo lado do bot; **o cliente nunca
+recebe a frota inimiga** — anti-trapaça preservada).
+
+| Área | Resultado |
+|---|:--:|
+| Lobby carrega + papel (Jogador 1/2) + "aguardando oponente" | PASS |
+| Canvas WebGL renderiza (lobby, posicionamento, acerto, afundamento, sonar, vitória) | PASS |
+| Posicionamento: arrastar, girar, aleatório, validação (rejeita sobreposição/fora) | PASS |
+| Transições de tela | PASS |
+| Tiro normal: água / acerto / afundou refletindo nos dois lados | PASS |
+| Sonar · Salva Tripla · Torpedo · Bombardeio · Reparo (usados em partida real) | PASS |
+| Gating de power-up (desabilitado sem energia / fora da vez) | PASS |
+| Atribuição P1/P2; 3º acesso = espectador / "partida cheia" | PASS |
+| Turnos alternados (não dá pra agir fora da vez) | PASS |
+| Vitória declarando o vencedor correto | PASS |
+| Revanche reiniciando com ambos conectados (inclui 2ª partida completa) | PASS |
+| Reconexão (recarregar na carência) retomando o estado | PASS |
+| Anti-trapaça via `eval` no cliente (`enemy.fleet` undefined; view nunca vaza) | PASS |
+| Watchdog de anti-trapaça do bot (nunca disparou) | PASS |
+| `assert-no-errors --strict` (zero erros de console/JS/WebSocket) | PASS |
+
+### Bug encontrado e corrigido (1)
+- **Trava da tela de fim após revanche.** `_renderEnd` agendava um `setTimeout` de revelação
+  da tela de fim que nunca era cancelado; quando a revanche reiniciava para o posicionamento
+  em menos de 1,4 s, o timer obsoleto cobria a tela de posicionamento e travava o jogador.
+  **Correção (na fonte, `public/js/main.js`):** o timer é cancelado em toda mudança de fase
+  (`clearTimeout(this._endTimer)` no topo de `_onPhaseChange`); a tela de fim é armada uma
+  única vez na fase `finished` com guarda `if (this.state.phase !== 'finished') return;`;
+  `_renderEnd` passou a só atualizar o texto do status da revanche.
+  **Revalidado pelo QA: PASS** (caminho rápido de revanche cai no posicionamento; 2ª partida
+  jogada até a vitória; zero erros).
+
+Nenhum outro defeito de produto encontrado.
+
+---
+
+## Screenshots de verificação visual
+
+Em [`screenshots/`](./screenshots) (capturados em 390×844, todos com o canvas WebGL
+renderizado — nenhum em branco):
+
+| Arquivo | Cena |
+|---|---|
+| `01-lobby.png` | Lobby: oceano animado, título, grade tática |
+| `02-placement.png` | Posicionamento: navios procedurais, bandeja, controles |
+| `03-battle.png` | Batalha: tabuleiro inimigo, mini-mapa próprio, HUD, energia, power-ups |
+| `04-hit.png` | Acerto: marcador de fogo na célula |
+| `05-sink.png` | Afundamento: destroços + bônus de energia |
+| `06-sonar.png` | Sonar: varredura 3×3 com 3 contatos detectados |
+| `07-torpedo.png` | Torpedo: controles de linha/sentido + impacto |
+| `08-triple.png` | Salva Tripla: 3 acertos no mesmo turno |
+| `09-bombard.png` | Bombardeio: 3×3 (acertos no centro + água ao redor) |
+| `10-repair.png` | Reparo: foco no próprio mar, alvo de célula danificada |
+| `11-victory.png` | Vitória: "VITÓRIA" dourado + flares |
+| `12-reconnection.png` | Reconexão: batalha retomada com o mesmo estado |
+| `13-rematch.png` | Revanche (caminho rápido): cai no posicionamento — bug corrigido |
+| `14-reduced-effects.png` | Modo de efeitos reduzidos (`?fx=low`) ainda renderiza |
+
+---
+
+## Como reproduzir
+
+```bash
+npm install
+npm run test:all                  # LOOP A (motor + anti-trapaça + rede)
+npm start                         # sobe o servidor (imprime a URL da LAN)
+
+# LOOP B (navegador):
+bash scripts/qa-chrome.sh         # Chrome headless COM WebGL (390x844) na porta do webtest
+WT=~/.claude/skills/webtest/webtest.sh
+bash "$WT" reset && bash "$WT" goto http://localhost:5180/
+node scripts/bot.js --url=http://localhost:5180 --id=bot2 --fixed --auto
+```
+
+## Performance
+Pooling de partículas e **degradação automática de qualidade**: se o FPS médio cair abaixo
+de ~45, a cena desliga o filtro de displacement da água, o blur das grades e reduz a contagem
+de partículas (uma vez, sem oscilar). Override manual para aparelhos antigos: abrir com
+`?fx=low`. Verificado: `quality:'full'` → filtros ativos; `?fx=low` → `quality:'reduced'`,
+filtros removidos, 0 erros.

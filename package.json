@@ -1,0 +1,34 @@
+{
+  "name": "batalha-naval",
+  "version": "1.0.0",
+  "description": "Batalha Naval com power-ups para 2 jogadores em rede local (LAN). Servidor autoritativo Node + Socket.IO, cliente WebGL com PixiJS.",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node test/engine-sim.js",
+    "test:engine": "node test/engine-sim.js",
+    "test:anticheat": "node test/anticheat.test.js",
+    "test:server": "node test/server-flow.test.js",
+    "test:all": "node test/engine-sim.js && node test/anticheat.test.js && node test/server-flow.test.js"
+  },
+  "keywords": [
+    "battleship",
+    "batalha-naval",
+    "socket.io",
+    "pixijs",
+    "webgl",
+    "lan",
+    "game"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "pixi.js": "^7.4.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.5"
+  }
+}
