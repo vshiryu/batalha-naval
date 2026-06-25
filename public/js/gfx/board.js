@@ -5,6 +5,7 @@
 
 import { COLORS } from '../constants.js';
 import { makeShip } from './ships.js';
+import { buildTextures } from './textures.js';
 
 const PIXI = window.PIXI;
 const LETTERS = 'ABCDEFGHIJ';
@@ -17,17 +18,33 @@ export class Board {
     this.N = boardSize;
     this.cell = 30;
     this.gutter = 16;
+    this.persp = 0.82; // subtle board tilt (this looked right). 1 = flat top-down.
+    this.depth = 1.0; // no vertical compression — keep the board near its top-down height.
+    this.foreshorten = 1.0; // no squash; ship 3D volume is baked into the oblique sprite.
 
     this.container = new PIXI.Container();
     this.gridGlow = new PIXI.Graphics();
     this.grid = new PIXI.Graphics();
     this.fillLayer = new PIXI.Graphics();
+    this.radarLayer = new PIXI.Container();
+    this.radarMask = new PIXI.Graphics();
     this.labelLayer = new PIXI.Container();
     this.shipLayer = new PIXI.Container();
     this.markerLayer = new PIXI.Container();
     this.overlayLayer = new PIXI.Container();
-    this.container.addChild(this.fillLayer, this.gridGlow, this.grid, this.labelLayer, this.shipLayer, this.markerLayer, this.overlayLayer);
+    this.container.addChild(this.fillLayer, this.gridGlow, this.grid, this.radarLayer, this.radarMask, this.labelLayer, this.shipLayer, this.markerLayer, this.overlayLayer);
     stage.boardLayer.addChild(this.container);
+
+    // Rotating radar sweep on the ENEMY board (command-room feel).
+    if (side === 'enemy') {
+      const tex = buildTextures();
+      this.radar = new PIXI.Sprite(tex.radar);
+      this.radar.anchor.set(0.5);
+      this.radar.blendMode = PIXI.BLEND_MODES.ADD;
+      this.radar.alpha = 0.5;
+      this.radarLayer.addChild(this.radar);
+      this.radarLayer.mask = this.radarMask;
+    }
 
     this.gridBlur = new PIXI.BlurFilter(6);
     this.gridBlur.quality = 2;
@@ -38,6 +55,7 @@ export class Board {
     this.ships = new Map(); // key -> ship container
     this.burning = new Set(); // "r,c" cells with fire
     this._burnTimer = 0;
+    this._foamTimer = 0;
     this._t = 0;
     this.onTap = null;
 
@@ -61,57 +79,108 @@ export class Board {
     this.container.y = y;
     this._drawGrid();
     this._drawLabels();
+    this._layoutRadar();
   }
 
-  cellToLocal(r, c) { return { x: (c + 0.5) * this.cell, y: (r + 0.5) * this.cell }; }
-  // Local center + rotation for a ship anchored at (r0,c0).
+  _layoutRadar() {
+    if (this.side !== 'enemy') return;
+    // mask = the board trapezoid; radar centered on the board centroid
+    const TL = this._project(0, 0), TR = this._project(1, 0), BR = this._project(1, 1), BL = this._project(0, 1);
+    this.radarMask.clear();
+    this.radarMask.beginFill(0xffffff, 1);
+    this.radarMask.moveTo(TL.x, TL.y); this.radarMask.lineTo(TR.x, TR.y);
+    this.radarMask.lineTo(BR.x, BR.y); this.radarMask.lineTo(BL.x, BL.y);
+    this.radarMask.closePath(); this.radarMask.endFill();
+    const cen = this._project(0.5, 0.5);
+    this.radar.x = cen.x; this.radar.y = cen.y;
+    this.radar.width = this.radar.height = this.gridPx * 1.5;
+  }
+
+  // --- subtle perspective projection (ocean stays flat; taps stay precise) ---
+  _rowScale(v) { const s = this.persp; return s + (1 - s) * v; }
+  // normalized board (u,v) in [0,1]^2 -> local px { x, y, scale }
+  _project(u, v) {
+    const s = this.persp, g = this.gridPx, hf = this.depth;
+    const rs = s + (1 - s) * v;
+    const yFrac = (s * v + (1 - s) * v * v / 2) / ((1 + s) / 2);
+    const offY = g * (1 - hf) / 2; // keep the board vertically centred in its square
+    return { x: g / 2 + (u - 0.5) * g * rs, y: offY + g * hf * yFrac, scale: rs };
+  }
+  // inverse of _project (local px -> normalized u,v)
+  _unproject(x, y) {
+    const s = this.persp, g = this.gridPx, hf = this.depth;
+    const offY = g * (1 - hf) / 2;
+    const Y = ((y - offY) / (g * hf)) * ((1 + s) / 2);
+    const a = (1 - s) / 2;
+    const v = a < 1e-6 ? Y / s : (-s + Math.sqrt(s * s + 4 * a * Y)) / (2 * a);
+    const rs = s + (1 - s) * v;
+    return { u: (x - g / 2) / (g * rs) + 0.5, v };
+  }
+
+  cellToLocal(r, c) { return this._project((c + 0.5) / this.N, (r + 0.5) / this.N); }
+  cellScale(r) { return this._rowScale((r + 0.5) / this.N); }
+  // 4 projected corners of a cell (for quad markers / overlays)
+  _cellCorners(r, c, insetPx = 0) {
+    const N = this.N, e = insetPx / this.gridPx;
+    const u0 = c / N + e, u1 = (c + 1) / N - e, v0 = r / N + e, v1 = (r + 1) / N - e;
+    return [this._project(u0, v0), this._project(u1, v0), this._project(u1, v1), this._project(u0, v1)];
+  }
+
+  // Center, rotation and perspective scale for a ship anchored at (r0,c0).
   shipCenter(r0, c0, orientation, size) {
-    const cx = orientation === 'v' ? (c0 + 0.5) * this.cell : (c0 + size / 2) * this.cell;
-    const cy = orientation === 'v' ? (r0 + size / 2) * this.cell : (r0 + 0.5) * this.cell;
-    return { x: cx, y: cy, rotation: orientation === 'v' ? Math.PI / 2 : 0 };
+    const u = orientation === 'v' ? (c0 + 0.5) / this.N : (c0 + size / 2) / this.N;
+    const v = orientation === 'v' ? (r0 + size / 2) / this.N : (r0 + 0.5) / this.N;
+    const p = this._project(u, v);
+    return { x: p.x, y: p.y, rotation: orientation === 'v' ? Math.PI / 2 : 0, scale: p.scale };
   }
   worldCenter(r, c) { const p = this.cellToLocal(r, c); return { x: this.container.x + p.x, y: this.container.y + p.y }; }
   localToCell(x, y) {
-    const c = Math.floor(x / this.cell), r = Math.floor(y / this.cell);
+    const { u, v } = this._unproject(x, y);
+    const c = Math.floor(u * this.N), r = Math.floor(v * this.N);
     if (r < 0 || c < 0 || r >= this.N || c >= this.N) return null;
     return { r, c };
   }
 
   _drawGrid() {
-    const g = this.grid, gg = this.gridGlow, n = this.N, s = this.cell;
-    g.clear(); gg.clear();
-    this.fillLayer.clear();
-    // faint tactical fill so the grid reads over water
-    this.fillLayer.beginFill(0x0a1c30, this.side === 'enemy' ? 0.30 : 0.22);
-    this.fillLayer.drawRoundedRect(-4, -4, n * s + 8, n * s + 8, 8);
-    this.fillLayer.endFill();
+    const g = this.grid, gg = this.gridGlow, n = this.N;
+    g.clear(); gg.clear(); this.fillLayer.clear();
+    const TL = this._project(0, 0), TR = this._project(1, 0), BR = this._project(1, 1), BL = this._project(0, 1);
+    // faint tactical fill (trapezoid) so the grid reads over the water
+    this.fillLayer.beginFill(0x0a1c30, this.side === 'enemy' ? 0.32 : 0.24);
+    this.fillLayer.moveTo(TL.x, TL.y); this.fillLayer.lineTo(TR.x, TR.y);
+    this.fillLayer.lineTo(BR.x, BR.y); this.fillLayer.lineTo(BL.x, BL.y);
+    this.fillLayer.closePath(); this.fillLayer.endFill();
 
     for (let i = 0; i <= n; i++) {
       const a = (i % 5 === 0) ? 0.55 : 0.22;
+      const hl = this._project(0, i / n), hr = this._project(1, i / n); // horizontal
+      const vt = this._project(i / n, 0), vb = this._project(i / n, 1); // converging vertical
       gg.lineStyle(3, COLORS.gridTeal, a * 0.8);
-      gg.moveTo(i * s, 0); gg.lineTo(i * s, n * s);
-      gg.moveTo(0, i * s); gg.lineTo(n * s, i * s);
+      gg.moveTo(hl.x, hl.y); gg.lineTo(hr.x, hr.y);
+      gg.moveTo(vt.x, vt.y); gg.lineTo(vb.x, vb.y);
       g.lineStyle(1, COLORS.gridCyan, a);
-      g.moveTo(i * s, 0); g.lineTo(i * s, n * s);
-      g.moveTo(0, i * s); g.lineTo(n * s, i * s);
+      g.moveTo(hl.x, hl.y); g.lineTo(hr.x, hr.y);
+      g.moveTo(vt.x, vt.y); g.lineTo(vb.x, vb.y);
     }
     g.lineStyle(2, COLORS.gridTeal, 0.7);
-    g.drawRoundedRect(0, 0, n * s, n * s, 4);
+    g.moveTo(TL.x, TL.y); g.lineTo(TR.x, TR.y); g.lineTo(BR.x, BR.y); g.lineTo(BL.x, BL.y); g.closePath();
     g.lineStyle(0);
   }
 
   _drawLabels() {
     this.labelLayer.removeChildren();
-    const s = this.cell, fs = Math.max(9, Math.min(16, s * 0.42));
+    const fs = Math.max(9, Math.min(16, this.cell * 0.42));
     const style = { fontFamily: 'Rajdhani, Orbitron, system-ui, sans-serif', fontSize: fs, fill: 0x7fb8d8, fontWeight: '600' };
     for (let c = 0; c < this.N; c++) {
+      const p = this._project((c + 0.5) / this.N, 0);
       const t = new PIXI.Text(LETTERS[c], style);
-      t.anchor.set(0.5); t.x = (c + 0.5) * s; t.y = -this.gutter * 0.55;
+      t.anchor.set(0.5); t.x = p.x; t.y = p.y - this.gutter * 0.5; t.scale.set(p.scale);
       this.labelLayer.addChild(t);
     }
     for (let r = 0; r < this.N; r++) {
+      const p = this._project(0, (r + 0.5) / this.N);
       const t = new PIXI.Text(String(r + 1), style);
-      t.anchor.set(0.5); t.x = -this.gutter * 0.55; t.y = (r + 0.5) * s;
+      t.anchor.set(0.5); t.x = p.x - this.gutter * 0.5 * p.scale; t.y = p.y; t.scale.set(p.scale);
       this.labelLayer.addChild(t);
     }
   }
@@ -127,15 +196,41 @@ export class Board {
       this.ships.set(key, sc);
       this.shipLayer.addChild(sc);
     }
-    const orient = ship.orientation;
-    const r0 = ship.cells[0].r, c0 = ship.cells[0].c;
-    const cx = orient === 'v' ? (c0 + 0.5) * this.cell : (c0 + ship.size / 2) * this.cell;
-    const cy = orient === 'v' ? (r0 + ship.size / 2) * this.cell : (r0 + 0.5) * this.cell;
-    sc.x = cx; sc.y = cy;
-    sc.rotBase = orient === 'v' ? Math.PI / 2 : 0;
-    sc.rotation = sc.rotBase;
-    sc.baseX = cx; sc.baseY = cy; sc.bobSeed = (r0 * 7 + c0 * 13);
+    this.applyShipTransform(sc, ship.cells[0].r, ship.cells[0].c, ship.orientation, ship.size);
     return sc;
+  }
+
+  // Ship transform: projected footprint CENTER + a uniform scale that converts the
+  // ship's cell-unit sprite to screen px with the board's perspective narrowing.
+  // The 3D orientation is baked into the orientation-specific texture (chosen via
+  // sc.applyOrientation), so the container is NOT rotated.
+  shipTransform(r0, c0, orientation, size) {
+    const u = orientation === 'v' ? (c0 + 0.5) / this.N : (c0 + size / 2) / this.N;
+    const v = orientation === 'v' ? (r0 + size / 2) / this.N : (r0 + 0.5) / this.N;
+    const p = this._project(u, v);
+    // shear slope = the screen tilt of this column's grid line (dx/dy), so the ship
+    // leans to follow the converging columns near the edges. Measured from the SAME
+    // board projection the grid uses, so it matches exactly.
+    const e = 0.0015;
+    const pA = this._project(u, Math.max(0, v - e)), pB = this._project(u, Math.min(1, v + e));
+    const dy = pB.y - pA.y;
+    const m = Math.abs(dy) > 1e-6 ? (pB.x - pA.x) / dy : 0;
+    return { x: p.x, y: p.y, scale: this.cell * p.scale, m };
+  }
+
+  // Position/scale/shear a ship container for a cell anchor (shared with placement).
+  // The shear (skew.x) aligns the ship's long axis with the board's perspective; the
+  // baked texture keeps the screen-fixed light/shadow.
+  applyShipTransform(sc, r0, c0, orientation, size) {
+    const t = this.shipTransform(r0, c0, orientation, size);
+    if (sc.applyOrientation) sc.applyOrientation(orientation);
+    const S = t.scale, sy = S * Math.sqrt(1 + t.m * t.m), sk = Math.atan(t.m);
+    sc.x = t.x; sc.y = t.y;
+    sc.rotation = 0; sc.skew.set(sk, 0);
+    sc.scale.set(S, sy);
+    sc.baseX = t.x; sc.baseY = t.y;
+    sc.baseScale = S; sc.baseScaleX = S; sc.baseScaleY = sy; sc.baseSkew = sk;
+    sc.bobSeed = r0 * 7 + c0 * 13;
   }
 
   setOwnFleet(fleet) {
@@ -223,41 +318,44 @@ export class Board {
         const col = cellr.hasShip ? COLORS.enemy : COLORS.gridCyan;
         o.lineStyle(2, col, 0.9);
         o.beginFill(col, cellr.hasShip ? 0.22 : 0.06);
-        o.drawRoundedRect(cellr.c * this.cell + 2, cellr.r * this.cell + 2, this.cell - 4, this.cell - 4, 4);
+        this._poly(o, this._cellCorners(cellr.r, cellr.c, 2));
         o.endFill();
-        if (cellr.hasShip) { o.beginFill(col, 0.9); o.drawCircle(p.x, p.y, this.cell * 0.12); o.endFill(); }
+        if (cellr.hasShip) { o.beginFill(col, 0.9); o.drawCircle(p.x, p.y, this.cell * p.scale * 0.12); o.endFill(); }
         o._sonar = true;
         this.overlayLayer.addChild(o);
       }
     }
   }
 
-  _cellRect(r, c, inset = 0) {
-    return [c * this.cell + inset, r * this.cell + inset, this.cell - inset * 2, this.cell - inset * 2];
+  _poly(g, corners) {
+    g.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < corners.length; i++) g.lineTo(corners[i].x, corners[i].y);
+    g.closePath();
   }
 
   _drawHit(r, c) {
     const g = new PIXI.Graphics();
     const p = this.cellToLocal(r, c);
-    g.beginFill(COLORS.fire1, 0.5); g.drawCircle(p.x, p.y, this.cell * 0.4); g.endFill();
-    g.beginFill(COLORS.ember, 0.9); g.drawCircle(p.x, p.y, this.cell * 0.18); g.endFill();
-    g.lineStyle(2, COLORS.fire2, 0.9); g.drawCircle(p.x, p.y, this.cell * 0.3);
+    const rad = this.cell * p.scale;
+    g.beginFill(COLORS.fire1, 0.5); g.drawCircle(p.x, p.y, rad * 0.4); g.endFill();
+    g.beginFill(COLORS.ember, 0.9); g.drawCircle(p.x, p.y, rad * 0.18); g.endFill();
+    g.lineStyle(2, COLORS.fire2, 0.9); g.drawCircle(p.x, p.y, rad * 0.3);
     this.markerLayer.addChild(g);
   }
 
   _drawMiss(r, c) {
     const g = new PIXI.Graphics();
     const p = this.cellToLocal(r, c);
-    g.lineStyle(2, COLORS.splash, 0.7); g.drawCircle(p.x, p.y, this.cell * 0.26);
-    g.beginFill(COLORS.gridCyan, 0.35); g.drawCircle(p.x, p.y, this.cell * 0.1); g.endFill();
+    const rad = this.cell * p.scale;
+    g.lineStyle(2, COLORS.splash, 0.7); g.drawCircle(p.x, p.y, rad * 0.26);
+    g.beginFill(COLORS.gridCyan, 0.35); g.drawCircle(p.x, p.y, rad * 0.1); g.endFill();
     this.markerLayer.addChild(g);
   }
 
   _drawSunkCell(r, c) {
     const g = new PIXI.Graphics();
     g.beginFill(0x10202c, 0.55);
-    const [x, y, w, h] = this._cellRect(r, c, 1.5);
-    g.drawRoundedRect(x, y, w, h, 3);
+    this._poly(g, this._cellCorners(r, c, 1.5));
     g.endFill();
     this.markerLayer.addChild(g);
   }
@@ -275,53 +373,96 @@ export class Board {
     for (const c of cells) {
       g.lineStyle(2.5, col, 0.95);
       g.beginFill(col, 0.18);
-      const [x, y, w, h] = this._cellRect(c.r, c.c, 2);
-      g.drawRoundedRect(x, y, w, h, 4);
+      this._poly(g, this._cellCorners(c.r, c.c, 2));
       g.endFill();
     }
     this.overlayLayer.addChild(g);
   }
 
-  // crosshair marker on the primary aim cell
+  // animated lock-on reticle on the primary aim cell
   setCrosshair(cell, kind = 'target') {
     const g = new PIXI.Graphics();
     g._aim = true;
-    const col = kind === 'repair' ? COLORS.gridTeal : COLORS.player;
-    const p = this.cellToLocal(cell.r, cell.c);
-    const s = this.cell * 0.4;
-    g.lineStyle(2, col, 1);
-    g.drawCircle(p.x, p.y, s * 0.7);
-    g.moveTo(p.x - s, p.y); g.lineTo(p.x - s * 0.3, p.y);
-    g.moveTo(p.x + s * 0.3, p.y); g.lineTo(p.x + s, p.y);
-    g.moveTo(p.x, p.y - s); g.lineTo(p.x, p.y - s * 0.3);
-    g.moveTo(p.x, p.y + s * 0.3); g.lineTo(p.x, p.y + s);
+    g._reticle = { cell, kind, t: 0, col: kind === 'repair' ? COLORS.gridTeal : COLORS.player };
     this.overlayLayer.addChild(g);
+    this._reticleGfx = g;
+    this._drawReticle(g, 0);
+  }
+
+  _drawReticle(g, lockT) {
+    const r = g._reticle; if (!r) return;
+    const p = this.cellToLocal(r.cell.r, r.cell.c);
+    const s = this.cell * p.scale * 0.5;
+    // brackets ease in from larger to snug ("lock on")
+    const spread = s * (1 + (1 - lockT) * 0.9);
+    const len = s * 0.45;
+    const pulse = 0.7 + Math.sin(this._t / 180) * 0.3;
+    g.clear();
+    g.lineStyle(2.4, r.col, pulse);
+    const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+    for (const [sx, sy] of corners) {
+      const cx = p.x + sx * spread, cy = p.y + sy * spread;
+      g.moveTo(cx, cy); g.lineTo(cx - sx * len, cy);
+      g.moveTo(cx, cy); g.lineTo(cx, cy - sy * len);
+    }
+    g.lineStyle(1.5, r.col, pulse * 0.8);
+    g.drawCircle(p.x, p.y, s * 0.34 * (0.6 + lockT * 0.4));
+    g.moveTo(p.x - s * 0.18, p.y); g.lineTo(p.x + s * 0.18, p.y);
+    g.moveTo(p.x, p.y - s * 0.18); g.lineTo(p.x, p.y + s * 0.18);
   }
 
   // ---------------------------------------------------------------- update
   update(dt, time) {
     this._t = time;
-    // idle bob + subtle roll for ships
+    // rotating radar sweep (enemy board), paused when quality is reduced
+    if (this.radar) {
+      this.radar.visible = this.stage.quality !== 'reduced';
+      if (this.radar.visible) this.radar.rotation += dt * 0.0009;
+    }
+    // animated lock-on reticle
+    if (this._reticleGfx && this._reticleGfx.parent && this._reticleGfx._reticle) {
+      const ret = this._reticleGfx._reticle;
+      ret.t = Math.min(1, ret.t + dt / 180);
+      this._drawReticle(this._reticleGfx, ret.t);
+    }
+    // idle bob + subtle roll + foam for ships
     for (const [, sc] of this.ships) {
       if (sc.baseX == null) continue;
       const ph = (time / 900) + (sc.bobSeed || 0);
+      // position-only bob: the perspective shear lives in skew/scale and must not be overwritten
       sc.x = sc.baseX + Math.sin(ph) * this.cell * 0.03;
       sc.y = sc.baseY + Math.cos(ph * 0.8) * this.cell * 0.03;
-      sc.rotation = (sc.rotBase || 0) + Math.sin(ph * 0.7) * 0.02;
+      if (sc.foam) sc.foam.alpha = Math.max(0, 0.12 + Math.sin(ph * 1.3) * 0.1);
     }
-    // persistent fire/smoke on burning cells
+    // persistent fire/smoke/heat-haze on burning cells
+    const reduced = this.stage.quality === 'reduced';
     if (this.burning.size && this.effects) {
       this._burnTimer += dt;
-      const interval = 110;
+      const interval = reduced ? 150 : 95;
       if (this._burnTimer >= interval) {
         this._burnTimer = 0;
-        let budget = this.stage.quality === 'reduced' ? 2 : 4;
+        let budget = reduced ? 2 : 4;
         for (const key of this.burning) {
           if (budget-- <= 0) break;
           const [r, c] = key.split(',').map(Number);
           const w = this.worldCenter(r, c);
+          const sc = this.cellScale(r);
           this.effects.ember(w.x, w.y);
-          if (Math.random() < 0.5) this.effects.smokePuff(w.x, w.y - this.cell * 0.1, 0.7);
+          this.effects.smokePuff(w.x, w.y - this.cell * 0.12 * sc, 0.7 * sc);
+          if (!reduced) this.effects.heatHaze(w.x, w.y - this.cell * 0.2 * sc, sc);
+        }
+      }
+    }
+    // foam wake around idle ships (own/wreck boards), low rate
+    if (!reduced && this.effects && this.ships.size) {
+      this._foamTimer += dt;
+      if (this._foamTimer >= 520) {
+        this._foamTimer = 0;
+        const arr = [...this.ships.values()];
+        const sc = arr[Math.floor(Math.random() * arr.length)];
+        if (sc && sc.baseX != null) {
+          const ox = (Math.random() - 0.5) * sc.shipL * 0.7;
+          this.effects.foam(this.container.x + sc.baseX + ox, this.container.y + sc.baseY + sc.shipH * 0.2, (sc.baseScale || 1));
         }
       }
     }

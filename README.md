@@ -151,8 +151,13 @@ scripts/           # bot.js (jogador scriptado) · qa-chrome.sh (Chrome WebGL p/
 - **Porta única**: o Express serve o cliente estático e o Socket.IO; o PixiJS vem de
   `node_modules` em `/vendor/pixi`. Sem CORS, sem dev server, sem etapa de build.
 - **Zero assets externos**: navios, ícones, oceano e som são **gerados por código**
-  (PixiJS Graphics, ruído procedural em canvas, síntese Web Audio).
-- **Performance**: pooling de partículas e **degradação automática de efeitos** se o
-  FPS cair, para manter a fluidez no celular. Fontes via Google Fonts com fallback de
-  sistema (funciona offline com a fonte do sistema).
+  (canvas 2D para os cascos sombreados, ruído procedural, síntese Web Audio).
+- **Visual**: navios top-down sombreados (gradiente, oclusão, rim-light do time),
+  tabuleiro em **perspectiva leve** (toque preciso via projeção inversa), varredura de
+  radar, retículo de mira que trava, "bloom" aditivo nas explosões, fogo com heat-haze,
+  espuma nos navios e brilho especular na água.
+- **Performance**: pooling de partículas e **degradação automática** se o FPS cair
+  (desliga displacement da água, blur das grades, reduz partículas). Override manual:
+  `?fx=low` força efeitos reduzidos; `?fx=high` força efeitos completos. Fontes via
+  Google Fonts com fallback de sistema (funciona offline com a fonte do sistema).
 ```

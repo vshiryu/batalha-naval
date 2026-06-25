@@ -51,6 +51,7 @@ export class Effects {
     p.alpha1 = p.alpha1 != null ? p.alpha1 : 0;
     if (p.tint != null) p.sprite.tint = p.tint;
     p.sprite.x = p.x; p.sprite.y = p.y;
+    p.baseX = p.x; // anchor for wobble (heat shimmer)
     p.sprite.scale.set(p.scale0);
     p.sprite.alpha = p.alpha0;
     if (p.rot != null) p.sprite.rotation = p.rot;
@@ -68,6 +69,7 @@ export class Effects {
       if (p.drag) { p.vx *= 1 - p.drag * s; p.vy *= 1 - p.drag * s; }
       const sp = p.sprite;
       sp.x += p.vx * s; sp.y += p.vy * s;
+      if (p.wobbleAmp) sp.x = p.baseX + Math.sin((p.maxLife - p.life) * p.wobbleFreq + p.wobblePhase) * p.wobbleAmp;
       sp.rotation += p.rotVel * s;
       const e = p.ease ? p.ease(t) : t;
       sp.scale.set(lerp(p.scale0, p.scale1, e));
@@ -123,10 +125,16 @@ export class Effects {
 
   explosion(x, y, scale = 1) {
     this.stage.addShake(12 * scale);
-    // flash
+    // core flash
     this.spawn({
       texture: this.tex.radial, x, y, life: 220, tint: 0xfff1c0,
-      scale0: 0.2 * scale, scale1: 2.2 * scale, alpha0: 1, alpha1: 0,
+      scale0: 0.2 * scale, scale1: 2.4 * scale, alpha0: 1, alpha1: 0,
+      blend: PIXI.BLEND_MODES.ADD, ease: easeOutCubic,
+    });
+    // soft warm bloom halo (fake bloom — additive, no post filter)
+    this.spawn({
+      texture: this.tex.radial, x, y, life: 460, tint: 0xff9a4d,
+      scale0: 0.4 * scale, scale1: 4.2 * scale, alpha0: 0.55, alpha1: 0,
       blend: PIXI.BLEND_MODES.ADD, ease: easeOutCubic,
     });
     // fireball
@@ -170,6 +178,26 @@ export class Effects {
       vx: rand(-18, 18), vy: rand(-70, -30), drag: 1,
       tint: Math.random() < 0.5 ? COLORS.ember : COLORS.fire1, blend: PIXI.BLEND_MODES.ADD,
       scale0: rand(0.25, 0.5), scale1: 0, alpha0: 1, alpha1: 0,
+    });
+  }
+
+  // Rising, wobbling heat shimmer above burning cells (the "trembling air").
+  heatHaze(x, y, scale = 1) {
+    this.spawn({
+      texture: this.tex.heat, x, y, life: rand(750, 1150),
+      vy: -rand(45, 80), tint: 0xffd9a8, blend: PIXI.BLEND_MODES.ADD,
+      scale0: rand(0.5, 0.8) * scale, scale1: rand(1.0, 1.4) * scale,
+      alpha0: 0.4, alpha1: 0,
+      wobbleAmp: rand(5, 11) * scale, wobbleFreq: rand(0.008, 0.016), wobblePhase: rand(0, 6.28),
+    });
+  }
+
+  // A soft foam ripple around a ship hull (wake cue).
+  foam(x, y, scale = 1) {
+    this.spawn({
+      texture: this.tex.ring, x, y, life: 1100, tint: 0xbfeeff,
+      scale0: 0.12 * scale, scale1: 0.5 * scale, alpha0: 0.4, alpha1: 0,
+      ease: easeOutCubic, blend: PIXI.BLEND_MODES.ADD,
     });
   }
 

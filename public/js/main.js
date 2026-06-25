@@ -112,12 +112,12 @@ class Game {
       this.ui.buildShipTray(d.config.shipTypes, this.config.shipTypes[0].id);
       this.scene.enemyBoard.onTap = (cell) => this._onBoardTap(this.scene.enemyBoard, cell);
       this.scene.ownBoard.onTap = (cell) => this._onBoardTap(this.scene.ownBoard, cell);
-      // Manual low-effects override for older devices: open with ?fx=low
+      // Manual effects override: ?fx=low forces reduced; ?fx=high forces full
+      // (and disables auto-degrade — handy for capturing the full look).
       try {
-        if (new URLSearchParams(location.search).get('fx') === 'low') {
-          this.scene.stage._degraded = true;
-          this.scene.stage.setQuality('reduced');
-        }
+        const fx = new URLSearchParams(location.search).get('fx');
+        if (fx === 'low') { this.scene.stage._degraded = true; this.scene.stage.setQuality('reduced'); }
+        else if (fx === 'high') { this.scene.stage._degraded = true; this.scene.stage.setQuality('full'); }
       } catch (_e) { /* ignore */ }
     }
     if (d.role === 'spectator') {
