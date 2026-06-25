@@ -1,6 +1,7 @@
 # TEST_REPORT — Batalha Naval
 
-**Veredito final: PASS ✅** — LOOP A (motor, headless) e LOOP B (navegador real) verdes.
+**Veredito final: PASS ✅** — LOOP A (motor, headless) e LOOP B (navegador real) verdes,
+incluindo a reforma visual (navios sombreados, perspectiva, radar, bloom, heat-haze).
 Zero erros de console/WebSocket. Anti-trapaça verificada em duas camadas.
 
 ---
@@ -73,6 +74,36 @@ recebe a frota inimiga** — anti-trapaça preservada).
   jogada até a vitória; zero erros).
 
 Nenhum outro defeito de produto encontrado.
+
+---
+
+## Reforma visual (rodada 2) — navios, perspectiva e FX
+
+Após a v1, a UI foi repaginada: navios **sombreados em canvas** (gradiente, oclusão,
+rim-light do time, detalhe por classe), tabuleiro em **perspectiva leve**, varredura de
+**radar**, **retículo de mira que trava**, "bloom" aditivo, **fogo com heat-haze**, espuma
+nos navios e brilho especular na água. O motor/servidor não mudaram (LOOP A segue verde).
+
+Um defeito foi encontrado e corrigido **por mim no auto-teste** antes do QA: o canhão de ré
+(`dir=-1`) desenhava o cano com largura negativa, e `roundRect` derivava um raio negativo →
+`arcTo` lançava exceção, deixando 3 classes de navio invisíveis. Corrigido em
+`public/js/gfx/ships.js` (largura sempre positiva + clamp do raio).
+
+Revalidação do QA no navegador (`?fx=high`, 390×844) — **PASS, sem bugs de produto:**
+
+| Verificação | Resultado |
+|---|:--:|
+| 5 navios sombreados renderizam no posicionamento | PASS |
+| **Precisão do toque sob perspectiva** (projeção inversa) | PASS — round-trip exato nas 100 células; toques fora-de-centro e tiros reais em linhas longe/meio/perto acertam a célula exata, sem "vazar" pra vizinha |
+| Radar girando · retículo travando · bloom · fogo+heat-haze · espuma · wreck | PASS (todos renderizam) |
+| Regressão: sonar (sem dano) · bombardeio 3×3 · torpedo (1º navio) · vitória | PASS |
+| Anti-trapaça (eval no cliente + watchdog do bot) | PASS |
+| `assert-no-errors --strict` | PASS — zero erros |
+| Modo reduzido (`?fx=low`) ainda renderiza | PASS |
+
+Screenshots da reforma em [`screenshots/`](./screenshots): `v2-01-lobby` · `v2-02-ships-perspective`
+· `v2-03-radar-sweep` · `v2-04-lockon-reticle` · `v2-05-explosion-bloom` · `v2-06-fire-heathaze`
+· `v2-07-wreck-reveal` · `v2-08-bombard` · `v2-09-victory` · `v2-10-reduced-fx`.
 
 ---
 

@@ -164,6 +164,67 @@ export function dropletTexture(size = 24) {
   return texFromCanvas(c);
 }
 
+// Soft elongated foam ring that sits under a ship hull on the water.
+export function foamTexture(w = 192, h = 96) {
+  const c = canvas(w, h);
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
+  g.addColorStop(0, 'rgba(255,255,255,0)');
+  g.addColorStop(0.62, 'rgba(210,245,255,0)');
+  g.addColorStop(0.78, 'rgba(210,245,255,0.5)');
+  g.addColorStop(0.9, 'rgba(255,255,255,0.25)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.save();
+  ctx.translate(w / 2, h / 2);
+  ctx.scale(1, h / w);
+  ctx.beginPath(); ctx.arc(0, 0, w / 2, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  return texFromCanvas(c);
+}
+
+// Vertical heat-shimmer streak (additive) for the air above fire.
+export function heatTexture(w = 40, h = 96) {
+  const c = canvas(w, h);
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, h, 0, 0);
+  g.addColorStop(0, 'rgba(255,210,150,0.0)');
+  g.addColorStop(0.25, 'rgba(255,200,140,0.5)');
+  g.addColorStop(0.6, 'rgba(255,230,190,0.22)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.5, h);
+  ctx.quadraticCurveTo(w * 0.05, h * 0.5, w * 0.5, 0);
+  ctx.quadraticCurveTo(w * 0.95, h * 0.5, w * 0.5, h);
+  ctx.fill();
+  return texFromCanvas(c);
+}
+
+// Rotating radar wedge (a faded sweep), additive, masked to the board.
+export function radarTexture(size = 512) {
+  const c = canvas(size, size);
+  const ctx = c.getContext('2d');
+  const r = size / 2;
+  const steps = 80;
+  for (let i = 0; i < steps; i++) {
+    const a0 = (-Math.PI / 2) - (i / steps) * (Math.PI * 0.6);
+    const a1 = (-Math.PI / 2) - ((i + 1) / steps) * (Math.PI * 0.6);
+    const alpha = Math.pow(1 - i / steps, 2) * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(r, r);
+    ctx.arc(r, r, r, a0, a1, true);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(56,189,248,${alpha})`;
+    ctx.fill();
+  }
+  // leading edge line
+  ctx.strokeStyle = 'rgba(165,243,252,0.6)';
+  ctx.lineWidth = size * 0.006;
+  ctx.beginPath(); ctx.moveTo(r, r); ctx.lineTo(r, 0); ctx.stroke();
+  return texFromCanvas(c);
+}
+
 // A 4-point star spark for muzzle flashes / embers.
 export function sparkTexture(size = 48) {
   const c = canvas(size, size);
@@ -197,6 +258,9 @@ export function buildTextures() {
     ring: ringTexture(160, 0.06),
     droplet: dropletTexture(28),
     spark: sparkTexture(48),
+    foam: foamTexture(192, 96),
+    heat: heatTexture(40, 96),
+    radar: radarTexture(512),
   };
   return CACHE;
 }

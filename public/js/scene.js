@@ -9,6 +9,8 @@ import { Effects } from './gfx/effects.js';
 import { Board } from './gfx/board.js';
 import { TIMING } from './constants.js';
 
+const PIXI = window.PIXI;
+
 export class Scene {
   constructor(mountEl, audio) {
     this.stage = new Stage(mountEl);
@@ -20,6 +22,30 @@ export class Scene {
     this.focus = 'enemy';
     this.boardSize = 10;
     this.stage.onResize(() => this.layout());
+    this._initHeat();
+  }
+
+  // Subtle screen-space heat refraction on the FX layer while cells burn.
+  _initHeat() {
+    this._heatSprite = new PIXI.Sprite(this.effects.tex.noise);
+    this._heatSprite.renderable = false;
+    this._heatSprite.scale.set(2);
+    this.stage.fxLayer.addChild(this._heatSprite);
+    this._heatFilter = new PIXI.DisplacementFilter(this._heatSprite);
+    this._heatFilter.scale.set(5);
+    this._heatOn = false;
+    this.stage.addUpdater((dt) => this._updateHeat(dt));
+    this.stage.onQualityChange(() => { /* re-evaluated each frame in _updateHeat */ });
+  }
+
+  _updateHeat(dt) {
+    const burning = (this.enemyBoard && this.enemyBoard.burning.size) || (this.ownBoard && this.ownBoard.burning.size);
+    const want = !!burning && this.stage.quality !== 'reduced';
+    if (want !== this._heatOn) {
+      this._heatOn = want;
+      this.stage.fxLayer.filters = want ? [this._heatFilter] : null;
+    }
+    if (want) { this._heatSprite.x += dt * 0.03; this._heatSprite.y -= dt * 0.05; }
   }
 
   build(config) {

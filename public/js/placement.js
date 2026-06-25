@@ -98,10 +98,7 @@ export class PlacementController {
   _place(p) {
     const sc = this.sprites.get(p.id);
     if (!sc) return;
-    const cc = this.board.shipCenter(p.r, p.c, p.orientation, p.size);
-    sc.x = cc.x; sc.y = cc.y; sc.rotation = cc.rotation;
-    sc.baseX = cc.x; sc.baseY = cc.y; sc.rotBase = cc.rotation;
-    sc.bobSeed = p.r * 7 + p.c * 13;
+    this.board.applyShipTransform(sc, p.r, p.c, p.orientation, p.size);
   }
 
   _refreshAll() {
@@ -113,7 +110,7 @@ export class PlacementController {
     const p = this.placements.find((x) => x.id === this.selected);
     if (!p) { this.board.clearAim(); return; }
     this.board.setAim(this._cellsFor(p.r, p.c, p.orientation, p.size), 'valid');
-    for (const [id, sc] of this.sprites) sc.scale.set(id === this.selected ? 1.06 : 1);
+    for (const [id, sc] of this.sprites) { const f = id === this.selected ? 1.08 : 1; sc.scale.set((sc.baseScaleX || 1) * f, (sc.baseScaleY || 1) * f); }
   }
 
   _onDown(id, e) {
@@ -124,7 +121,7 @@ export class PlacementController {
     const grabCell = this.board.localToCell(lp.x, lp.y) || { r: p.r, c: p.c };
     this.drag = { id, dr: grabCell.r - p.r, dc: grabCell.c - p.c, last: { r: p.r, c: p.c } };
     const sc = this.sprites.get(id);
-    if (sc) { sc.scale.set(1.12); if (sc.shadow) sc.shadow.alpha = 0.6; }
+    if (sc) { sc.scale.set((sc.baseScaleX || 1) * 1.14, (sc.baseScaleY || 1) * 1.14); if (sc.shadow) sc.shadow.alpha = 0.6; }
     this.audio && this.audio.uiClick();
     this._highlightSelected();
     e.stopPropagation && e.stopPropagation();
@@ -145,9 +142,15 @@ export class PlacementController {
     const valid = this._isValid(p.id, r0, c0, p.orientation, p.size);
     this.drag.candidate = { r0, c0, valid };
     // move sprite to snapped center, show ghost
-    const cc = this.board.shipCenter(r0, c0, p.orientation, p.size);
+    const cc = this.board.shipTransform(r0, c0, p.orientation, p.size);
     const sc = this.sprites.get(p.id);
-    if (sc) { sc.x = cc.x; sc.y = cc.y; sc.rotation = cc.rotation; }
+    if (sc) {
+      if (sc.applyOrientation) sc.applyOrientation(p.orientation);
+      const S = cc.scale, sy = S * Math.sqrt(1 + cc.m * cc.m), sk = Math.atan(cc.m);
+      sc.x = cc.x; sc.y = cc.y; sc.rotation = 0; sc.skew.set(sk, 0);
+      sc.baseScale = S; sc.baseScaleX = S; sc.baseScaleY = sy; sc.baseSkew = sk;
+      sc.scale.set(S * 1.14, sy * 1.14);
+    }
     this.board.setAim(cells, valid ? 'valid' : 'invalid');
   }
 
@@ -156,7 +159,7 @@ export class PlacementController {
     const p = this.placements.find((x) => x.id === this.drag.id);
     const cand = this.drag.candidate;
     const sc = this.sprites.get(this.drag.id);
-    if (sc) { sc.scale.set(1.06); if (sc.shadow) sc.shadow.alpha = 0.4; }
+    if (sc) { sc.scale.set((sc.baseScaleX || 1) * 1.06, (sc.baseScaleY || 1) * 1.06); if (sc.shadow) sc.shadow.alpha = 0.4; }
     if (cand && cand.valid) {
       p.r = cand.r0; p.c = cand.c0;
       this.audio && this.audio.place();

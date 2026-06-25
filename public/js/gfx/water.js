@@ -54,6 +54,18 @@ export class Water {
       this.surface.addChild(f);
     }
 
+    // Bright specular glints (reflective sparkle on the surface).
+    this.glints = [];
+    for (let i = 0; i < 5; i++) {
+      const gl = new PIXI.Sprite(tex.radial);
+      gl.anchor.set(0.5);
+      gl.tint = 0xdff3ff;
+      gl.blendMode = PIXI.BLEND_MODES.ADD;
+      gl.gseed = Math.random() * 1000;
+      this.glints.push(gl);
+      this.surface.addChild(gl);
+    }
+
     // Displacement wobble.
     this.dispSprite = new PIXI.Sprite(tex.noise);
     this.dispSprite.renderable = false; // used only as a displacement map
@@ -93,6 +105,11 @@ export class Water {
       f.baseY = (i < 2 ? 0.3 : 0.75) * h;
       f.width = w * 0.9; f.height = h * 0.5;
     });
+    this.glints.forEach((gl, i) => {
+      gl.baseX = (0.12 + 0.76 * ((i + 0.5) / this.glints.length)) * w;
+      gl.baseY = (0.2 + 0.6 * ((i * 7 % 5) / 5)) * h;
+      gl.width = gl.height = Math.max(40, w * 0.10);
+    });
     this.w = w; this.h = h;
   }
 
@@ -110,10 +127,17 @@ export class Water {
 
     // Drift the specular and fog.
     this.spec.x = this.w * 0.5 + Math.sin(time / 5200) * this.w * 0.12;
-    this.spec.alpha = 0.08 + Math.sin(time / 2600) * 0.03;
+    this.spec.alpha = 0.12 + Math.sin(time / 2600) * 0.05;
     for (const f of this.fog) {
       f.x = f.baseX + Math.sin(time / 7000 + f.fseed) * this.w * 0.07;
       f.y = f.baseY + Math.cos(time / 9000 + f.fseed) * this.h * 0.04;
+    }
+    // twinkling, slowly drifting specular glints
+    for (const gl of this.glints) {
+      const tw = Math.sin(time / 520 + gl.gseed) * 0.5 + 0.5;
+      gl.alpha = 0.04 + tw * tw * 0.16;
+      gl.x = gl.baseX + Math.sin(time / 6000 + gl.gseed) * this.w * 0.05;
+      gl.y = gl.baseY + Math.cos(time / 8000 + gl.gseed) * this.h * 0.03;
     }
   }
 }
