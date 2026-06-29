@@ -29,7 +29,15 @@ const io = new Server(server, {
 
 // ---------------------------------------------------------------- static files
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
+// No-store on the client code: this is a LAN game served fresh from the notebook,
+// and aggressive mobile caching was leaving a phone on an OLD client build (e.g.
+// after a fix), so a simple reload now always picks up the latest JS/CSS/HTML.
+app.use(express.static(PUBLIC_DIR, {
+  extensions: ['html'],
+  etag: false,
+  lastModified: false,
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, must-revalidate'),
+}));
 
 // Serve the PixiJS UMD build straight from node_modules (no copy/build step).
 app.use(

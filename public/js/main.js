@@ -22,6 +22,16 @@ const ERR_PT = {
   fleet_incomplete: 'Posicione todos os navios.',
 };
 
+// One-line "what do I do now" hint shown when a power-up tool is selected, so it's
+// obvious the next step is to tap the board to aim (then press the fire button).
+const TOOL_HINT = {
+  sonar: 'Toque numa célula para varrer a área 3×3.',
+  triple: 'Toque em 3 células para a salva tripla.',
+  torpedo: 'Escolha linha/coluna e toque para mirar.',
+  bombard: 'Toque numa célula — atinge a área 3×3.',
+  repair: 'Toque numa célula danificada de um navio seu.',
+};
+
 class Game {
   constructor() {
     this.net = new Net();
@@ -244,17 +254,25 @@ class Game {
   }
 
   _selectTool(tool) {
-    if (!this.state || !this.state.yourTurn) { this.ui.toast('Aguarde a sua vez.'); return; }
+    if (!this.state || this.state.phase !== 'battle') return;
+    // Tappable-when-disabled: explain WHY instead of silently doing nothing.
+    if (!this.state.yourTurn) { this.ui.toast('Aguarde a sua vez.', true); return; }
+    const pu = this.config.powerUps[tool] || { cost: 0, name: tool };
+    if (this.state.you.energy < pu.cost) {
+      this.ui.toast(`Energia insuficiente: ${pu.name} custa ⚡${pu.cost} (você tem ⚡${this.state.you.energy}).`, true);
+      return;
+    }
     this.audio.powerSelect();
     this.tool = tool;
     this.aim = this._freshAim();
+    this.peeking = false; // selecting a tool always returns to its own board focus
     this.ui.setSelectedTool(tool);
     // repair aims at your own board; everything else at the enemy board
-    if (tool === 'repair') { this.peeking = false; this.scene.setFocus('own'); }
-    else { this.scene.setFocus('enemy'); }
+    this.scene.setFocus(tool === 'repair' ? 'own' : 'enemy');
     this.scene.renderState(this.state);
     this.ui.setTorpedoControls(tool === 'torpedo', this.aim.orient, this._dirLabel());
     this._refreshAim();
+    if (TOOL_HINT[tool]) this.ui.toast(TOOL_HINT[tool]);
   }
 
   _togglePeek() {
@@ -405,10 +423,21 @@ class Game {
     // render everything except the cells the action is about to reveal
     const suppress = this._pendingCells(state.lastAction);
     this.scene.renderState(state, { suppress });
-    try { await this.scene.animateAction(state, this.mySlot); } catch (_e) {}
-    this.scene.renderState(state); // reconcile (wrecks, sonar, etc.)
-    this.animating = false;
-    if (state.phase === 'battle') this._refreshAim();
+    try {
+      // Safety race: the choreography is a web of setTimeout + effect callbacks.
+      // If one effect ever fails to call its `done`, that Promise never resolves
+      // and `animating` would stay true forever — freezing all board input. Cap
+      // the wait so the board always becomes interactive again.
+      await Promise.race([
+        this.scene.animateAction(state, this.mySlot),
+        new Promise((res) => setTimeout(res, 5000)),
+      ]);
+    } catch (_e) { /* ignore */ }
+    finally {
+      this.scene.renderState(state); // reconcile (wrecks, sonar, etc.)
+      this.animating = false;
+      if (state.phase === 'battle') this._refreshAim();
+    }
   }
 
   _pendingCells(la) {

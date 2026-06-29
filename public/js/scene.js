@@ -59,7 +59,12 @@ export class Scene {
   _regions() {
     const W = this.stage.width, H = this.stage.height;
     // Big board sits in the central band; mini board tucks into the top-right.
-    const topUI = H * 0.135, bottomUI = H * 0.30;
+    // During placement, MEASURE the real "Posicione sua frota" panel and start the
+    // board just below it. A fixed inset can't account for a notch/safe-area or the
+    // hint text wrapping to an extra line on a narrow phone, which left the panel
+    // still slightly over the top of the board on some devices.
+    const topUI = this.phase === 'placement' ? this._placementTopInset() : H * 0.135;
+    const bottomUI = H * 0.30;
     const availH = H - topUI - bottomUI;
     const big = Math.min(W * 0.9, availH * 0.98);
     const bigX = (W - big) / 2;
@@ -67,8 +72,25 @@ export class Scene {
     const mini = Math.min(W * 0.32, 150);
     return {
       big: { x: bigX, y: bigY, size: big },
-      mini: { x: W - mini - 12, y: topUI * 0.2 + 8, size: mini },
+      mini: { x: W - mini - 12, y: (H * 0.135) * 0.2 + 8, size: mini },
     };
+  }
+
+  // Bottom edge (in stage px) of the placement instruction panel, so the board can
+  // start just below it on ANY device. Falls back to a height-based reserve if the
+  // panel can't be measured yet.
+  _placementTopInset() {
+    const H = this.stage.height;
+    try {
+      const el = (typeof document !== 'undefined') && document.getElementById('placement-header');
+      const view = this.stage.app && this.stage.app.view;
+      if (el && view && view.getBoundingClientRect) {
+        const pr = el.getBoundingClientRect();
+        const canvasTop = view.getBoundingClientRect().top;
+        if (pr.height > 0) return Math.max(H * 0.135, (pr.bottom - canvasTop) + 10);
+      }
+    } catch (_e) { /* fall through */ }
+    return H * 0.135 + Math.min(124, Math.max(96, H * 0.12));
   }
 
   layout() {
@@ -88,8 +110,20 @@ export class Scene {
 
   setPhaseView(phase) {
     this.phase = phase;
-    if (phase === 'placement') this.focus = 'own';
-    else if (this.focus !== 'own-peek') this.focus = 'enemy';
+    if (phase === 'placement') {
+      this.focus = 'own';
+      // Rematch resets to placement: wipe the previous match's markers, wrecks,
+      // fire and overlays from BOTH boards, or they bleed through onto the fresh
+      // placement board (leftover dots on the grid). Own-board ships are then
+      // rebuilt by the PlacementController.
+      for (const b of [this.enemyBoard, this.ownBoard]) {
+        if (!b) continue;
+        b.clearMarkers();
+        b.clearShips();
+      }
+    } else if (this.focus !== 'own-peek') {
+      this.focus = 'enemy';
+    }
     if (this.ownBoard) {
       this.ownBoard.clearAim && this.ownBoard.clearAim();
     }

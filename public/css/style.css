@@ -37,6 +37,9 @@ html, body {
 
 #ui { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
 #ui button, #ui .glass, #ui .pu, #ui .ship-pip { pointer-events: auto; }
+/* The placement header is pure text (no controls) and overlaps the top board
+   rows; let touches fall through to the board so the top ships stay grabbable. */
+#ui #placement-header { pointer-events: none; }
 .hidden { display: none !important; }
 
 .glass {
@@ -179,10 +182,12 @@ html, body {
 #energy-wrap.bump { animation: bump .4s ease; }
 @keyframes bump { 0%,100% { transform: scale(1);} 40% { transform: scale(1.04);} }
 
-#powerups { display: flex; gap: 6px; padding: 8px; overflow-x: auto; }
+/* Grid (not a scrolling row): all six power-ups are always visible and tappable
+   without horizontal scrolling, which was unreliable under touch-action:none. */
+#powerups { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; padding: 8px; }
 .pu {
-  flex: 1 0 auto; min-width: 60px; display: flex; flex-direction: column; align-items: center; gap: 3px;
-  padding: 8px 6px; border-radius: 12px; cursor: pointer;
+  min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 8px 4px; border-radius: 12px; cursor: pointer;
   background: rgba(56,189,248,.07); border: 1px solid rgba(56,189,248,.18); color: var(--text);
   transition: transform .08s, background .2s, border-color .2s, opacity .2s;
 }
@@ -193,7 +198,10 @@ html, body {
 .pu .pu-cost { font-size: .66rem; color: var(--energy-b); font-weight: 700; }
 .pu .pu-cost.free { color: var(--teal); }
 .pu.selected { border-color: var(--teal); background: rgba(45,212,191,.18); box-shadow: 0 0 14px rgba(45,212,191,.3); }
-.pu.disabled { opacity: .34; pointer-events: none; }
+/* Keep disabled power-ups TAPPABLE so a tap can explain WHY (insufficient energy /
+   not your turn) via a toast — pointer-events:none used to swallow the tap silently. */
+.pu.disabled { opacity: .42; filter: grayscale(.35); }
+.pu.disabled .pu-cost { color: var(--amber); }
 
 #torpedo-controls { display: flex; gap: 6px; padding: 8px; }
 .t-btn { flex: 1; padding: 8px; border-radius: 10px; background: rgba(167,139,250,.12); border: 1px solid rgba(167,139,250,.4); color: var(--text); font-family: var(--hud-font); font-weight: 600; cursor: pointer; }
@@ -232,5 +240,5 @@ html, body {
 @media (orientation: landscape) and (max-height: 520px) {
   #topbar { height: 18vh; }
   #battle-bottom { padding-bottom: 4px; }
-  .pu { min-width: 52px; }
+  .pu { padding: 6px 4px; }
 }

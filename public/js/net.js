@@ -4,15 +4,22 @@
 const CLIENT_ID_KEY = 'bn_client_id';
 
 function getClientId() {
+  // `?p=N` namespaces the stored id so two tabs/windows on ONE machine attach to
+  // DIFFERENT slots (handy for testing both players locally). Without it, a single
+  // shared id per origin is reused across tabs (so a refresh keeps the same slot).
+  let suffix = '';
+  try {
+    const p = new URLSearchParams(location.search).get('p');
+    if (p) suffix = '_' + String(p).replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
+  } catch (_e) { /* ignore */ }
+  const key = CLIENT_ID_KEY + suffix;
+  const fresh = () => 'c_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
   let id = null;
   try {
-    id = localStorage.getItem(CLIENT_ID_KEY);
-    if (!id) {
-      id = 'c_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem(CLIENT_ID_KEY, id);
-    }
+    id = localStorage.getItem(key);
+    if (!id) { id = fresh(); localStorage.setItem(key, id); }
   } catch (_e) {
-    id = 'c_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    id = fresh();
   }
   return id;
 }
