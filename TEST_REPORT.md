@@ -131,6 +131,70 @@ renderizado — nenhum em branco):
 
 ---
 
+## Correções de jogabilidade no celular (rodada 3) — `BUGS.md`
+
+Reportado em aparelhos reais: J1 (Android) quase não conseguia tocar para atirar; J2
+(iPhone) não conseguia posicionar (navios voltavam ao início); **ambos não usavam nenhum
+power-up, mesmo com energia**. Os 8 bugs (7 do `BUGS.md` + 1 descoberto na revalidação)
+foram corrigidos **só no cliente** — motor/servidor/regras/testes intactos (LOOP A segue
+**356 / 22.715 / 37**, 0 falhas).
+
+**Bug crítico descoberto na revalidação:** os sprites de navio e marcadores de acerto
+**interceptavam o toque nas células sob eles**, então o **Reparo** (cujo alvo é sempre uma
+célula danificada do próprio navio) era **impossível** — a causa real do *"não usei nenhum
+poder"*. Correção: o tabuleiro virou uma superfície única de toque
+(`container.interactiveChildren = false`; só o `hitArea` recebe ponteiro), com a
+`PlacementController` reativando a interação dos filhos apenas durante o arraste.
+
+Revalidação no navegador (mobile **390×844**, WebGL por software, **eventos de ponteiro
+sintéticos exercitando os handlers reais**):
+
+| Verificação | Resultado |
+|---|:--:|
+| Arraste: comita pela posição de soltura mesmo **sem `pointermove`** (bug do "volta ao início") | PASS |
+| Arraste com movimento · `pointercancel` não deixa drag pendurado · girar | PASS |
+| Toque pra atirar via `pointerdown`+`pointerup` (substitui `pointertap` frágil) | PASS |
+| **6 power-ups ponta-a-ponta**: Tiro · Sonar · Salva Tripla · Torpedo · Bombardeio · **Reparo** | PASS |
+| Feedback de power-up indisponível (toast "Energia insuficiente ⚡N") + dicas de mira | PASS |
+| Grade de power-ups: **6 botões visíveis sem rolagem** (390 px; alvos 54×77 px) | PASS |
+| `resolution` limitada a **1.5** em ponteiro grosso (mobile) | PASS |
+| `#placement-header` com `pointer-events:none` (não rouba o toque do topo) | PASS |
+| Reconexão (recarregar no meio da batalha) retoma o estado | PASS |
+| `assert-no-errors --strict` (console/JS/WebSocket) | PASS — zero |
+
+Screenshot: [`screenshots/v3-mobile-battle-powerups.png`](./screenshots) — batalha em 390×844
+com os 6 power-ups numa fileira só.
+
+### Rodada 2 (teste em 2 aparelhos) — 3 bugs a mais, reproduzidos e corrigidos
+
+Testando em celulares reais surgiram 3 defeitos não visíveis no emulador, todos reproduzidos
+num viewport real (360×800, DPR 3, toque emulado) e corrigidos:
+
+- **🔴 "Só dá pra mirar em alguns campos da linha 10".** O **filtro de calor
+  (DisplacementFilter) na camada de FX** passa a participar do hit-testing quando ativo
+  (após um navio começar a queimar, em qualidade cheia) e **engole os toques** do tabuleiro.
+  Reproduzido: round-trip caía para **39/100** (só as linhas de baixo respondiam) com o calor
+  ativo. **Correção:** camadas decorativas (oceano/FX/topo) com `eventMode='none'` — fora do
+  hit-testing. **Revalidado: 100/100 em todas as 10 linhas, qualidade cheia + calor ATIVO,**
+  4 tiros reais na linha de cima acertando, 0 erros de console.
+- **🟡 Painel "Posicione sua frota" cobria o porta-aviões.** Um inset fixo clareava no
+  emulador mas não no celular (entalhe/safe-area + dica quebrando em 2 linhas). O tabuleiro
+  agora **mede o painel real** e começa logo abaixo dele (margem de 31–47 px a 360/320 px;
+  confirmado visualmente).
+- **🟠 Navios não pegavam ao arrastar** (a textura 2.5D não cobre a célula da quilha). Agarrar
+  virou **por célula** (mapeamento exato): verificado agarrando o porta-aviões na linha 0 e
+  movendo para a linha 3.
+- **🟡 Revanche deixava pontos do tabuleiro anterior na tela.** No posicionamento o tabuleiro
+  não re-renderiza, então marcadores/chama da partida anterior ficavam. Novo `clearMarkers()`
+  chamado para os dois tabuleiros na transição de posicionamento (verificado: 3 marcas + chama
+  → 0 após a transição).
+
+Robustez extra: `Cache-Control: no-store` no cliente (reload sempre traz o build novo — um
+celular podia estar com código ANTIGO em cache, o que reproduz o sintoma original do bug #4),
+relayout no `visualViewport` e `pointercancel` tratado no tap do tabuleiro.
+
+---
+
 ## Como reproduzir
 
 ```bash

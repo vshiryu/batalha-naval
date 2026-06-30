@@ -59,12 +59,46 @@ export class Board {
     this._t = 0;
     this.onTap = null;
 
+    // Robust tap handling. PixiJS's `pointertap` needs a clean down+up on the same
+    // target with no `pointercancel` in between — under frame jank or an iOS
+    // pointer-cancel it simply never fires ("clicking like crazy" to register one
+    // shot). Instead we track pointerdown locally and treat a low-movement release
+    // as a tap, deriving the cell from the RELEASE position. An explicit hitArea
+    // (set in _drawGrid) makes the whole board trapezoid reliably interactive.
     this.container.eventMode = 'static';
-    this.container.on('pointertap', (e) => {
+    // Treat the board as a SINGLE tap surface: only the container's hitArea is a
+    // pointer target, never its children. Otherwise a grid line, a hit/miss marker,
+    // an aim overlay or a ship sprite sitting on top of a cell would swallow the tap
+    // — a hit marker over a damaged cell made Repair impossible, for instance. The
+    // PlacementController flips this back on while dragging ships into position.
+    this.container.interactiveChildren = false;
+    this._downPt = null;
+    this.container.on('pointerdown', (e) => {
       const lp = e.getLocalPosition(this.container);
+      this._downPt = { x: lp.x, y: lp.y };
+    });
+    const tryTap = (e) => {
+      if (!this._downPt) return;
+      const lp = e.getLocalPosition(this.container);
+      const moved = Math.hypot(lp.x - this._downPt.x, lp.y - this._downPt.y);
+      this._downPt = null;
+      // A phone tap is rarely pixel-perfect; tolerate up to ~1.2 cells of travel.
+      if (moved > this.cell * 1.2) return;
       const c = this.localToCell(lp.x, lp.y);
       if (c && this.onTap) this.onTap(c, e);
-    });
+    };
+    this.container.on('pointerup', tryTap);
+    this.container.on('pointerupoutside', tryTap);
+    // PixiJS doesn't surface pointercancel, which real mobile browsers can fire on a
+    // legit tap — that tap would be lost. Treat a cancel as a tap at the press cell.
+    this._onPointerCancel = () => {
+      if (!this._downPt) return;
+      const lp = this._downPt; this._downPt = null;
+      const c = this.localToCell(lp.x, lp.y);
+      if (c && this.onTap) this.onTap(c);
+    };
+    const view = stage.app.view;
+    if (view && view.addEventListener) view.addEventListener('pointercancel', this._onPointerCancel);
 
     stage.addUpdater((dt, time) => this.update(dt, time));
   }
@@ -145,6 +179,9 @@ export class Board {
     const g = this.grid, gg = this.gridGlow, n = this.N;
     g.clear(); gg.clear(); this.fillLayer.clear();
     const TL = this._project(0, 0), TR = this._project(1, 0), BR = this._project(1, 1), BL = this._project(0, 1);
+    // Explicit, cheap hit-test region = the board trapezoid (independent of how the
+    // fill graphics are drawn), so every tap over the board reliably reaches onTap.
+    this.container.hitArea = new PIXI.Polygon([TL.x, TL.y, TR.x, TR.y, BR.x, BR.y, BL.x, BL.y]);
     // faint tactical fill (trapezoid) so the grid reads over the water
     this.fillLayer.beginFill(0x0a1c30, this.side === 'enemy' ? 0.32 : 0.24);
     this.fillLayer.moveTo(TL.x, TL.y); this.fillLayer.lineTo(TR.x, TR.y);
@@ -245,6 +282,16 @@ export class Board {
   clearShips() {
     for (const [, sc] of this.ships) this.shipLayer.removeChild(sc);
     this.ships.clear();
+  }
+
+  // Wipe all transient combat marks (hit/miss/sunk, sonar/aim overlays, burning
+  // cells, lock-on reticle). Used on rematch so last match's marks don't linger.
+  clearMarkers() {
+    this.markerLayer.removeChildren();
+    this.overlayLayer.removeChildren();
+    this.burning.clear();
+    this._reticleGfx = null;
+    this._burnTimer = 0;
   }
 
   // --------------------------------------------------------------- rendering
@@ -471,6 +518,8 @@ export class Board {
   setInteractive(on) { this.container.eventMode = on ? 'static' : 'none'; this.container.cursor = on ? 'pointer' : 'default'; }
 
   destroy() {
+    const view = this.stage.app.view;
+    if (view && view.removeEventListener && this._onPointerCancel) view.removeEventListener('pointercancel', this._onPointerCancel);
     this.stage.boardLayer.removeChild(this.container);
     this.container.destroy({ children: true });
   }

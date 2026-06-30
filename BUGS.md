@@ -4,6 +4,23 @@
 > da fonte do PixiJS 7.4.3 instalado). Os bugs de **toque/arraste** ainda precisam de
 > confirmação rodando num aparelho real — veja a seção [Verificação pendente](#-verificação-pendente).
 
+> ## ✅ STATUS: TODOS CORRIGIDOS (2026-06-29)
+> Os 7 bugs abaixo foram corrigidos e **revalidados no navegador** em viewport mobile
+> **390×844** com toque emulado (eventos de ponteiro sintéticos exercitando os handlers
+> reais), além do **LOOP A** do motor (**356 / 22.715 / 37** asserções, **0 falhas**) e
+> `assert-no-errors --strict` (zero erros de console/JS/WebSocket).
+>
+> Durante a revalidação foi descoberto e corrigido um **8º bug crítico**, que era a causa
+> real de *"não consegui usar nenhum poder mesmo com energia"*: os sprites de navio e os
+> marcadores de acerto **engoliam o toque nas células sob eles**, tornando o **Reparo
+> impossível** (o alvo do Reparo é sempre uma célula danificada do seu **próprio** navio,
+> portanto sempre sob um navio + marcador). Detalhes na [Resolução](#-resolução-2026-06-29).
+>
+> **Os 6 power-ups foram exercitados de ponta a ponta no navegador** (Tiro, Sonar, Salva
+> Tripla, Torpedo, Bombardeio, Reparo) — selecionar → mirar no tabuleiro → FOGO → ação
+> aplicada. **Nenhuma regra/lógica/economia do motor foi alterada** (a economia de energia
+> ficou intacta a pedido do usuário; o problema dos power-ups não era de energia).
+
 ## Contexto do teste relatado
 - **Jogador 1 — Android:** quase não conseguia clicar para atirar. Só depois de ~2 min "clicando feito louco" conseguia selecionar a célula-alvo.
 - **Jogador 2 — iPhone:** não conseguia posicionar os barcos; eles **voltavam para a posição inicial**. A partida começou com a frota no layout padrão.
@@ -171,3 +188,38 @@ console. Recomendo abrir `http://192.168.31.102:5180/?fx=low` no aparelho para t
 se o toque melhorar muito, confirma o item #1 como causa principal.
 
 > Posso implementar as correções (sugiro começar por #2/#4) ou fazer a verificação no aparelho — é só pedir.
+
+---
+
+## ✅ Resolução (2026-06-29)
+
+Todas as correções são de **cliente** (nada no motor/servidor/testes/regras). Revalidado no
+navegador (mobile 390×844, WebGL por software, toque sintético nos handlers reais) + LOOP A.
+
+| # | Bug | Correção | Onde | Verificado |
+|---|-----|----------|------|:--:|
+| 8 | **(NOVO) Sprites/marcadores engoliam o toque nas células sob eles → Reparo impossível** | O tabuleiro virou uma **superfície única de toque**: `container.interactiveChildren = false` (só o `hitArea` do tabuleiro é alvo de ponteiro; nenhum filho — navio, marcador, overlay — intercepta). A `PlacementController` reativa `interactiveChildren` só durante o arraste. | `gfx/board.js`, `placement.js` | Reparo ponta-a-ponta: toque na célula danificada (4,2) sob o navio → cura confirmada |
+| 1 | Performance trava o input no mobile | `resolution` limitada a **1.5** em ponteiro grosso (coarse); degradação automática mais agressiva (FPS<50 após 2.5 s). O conserto do toque (#2/#4) tornou o input **independente de frame**, então jank deixa de travar o gesto. | `gfx/app.js` | resolution=1.5 confirmada no mobile |
+| 2 | Arraste volta ao início | Candidato semeado já no `pointerdown`; `_onUp` recalcula pela **posição de soltura** (cobre `pointermove` perdidos); `pointercancel` tratado; **pointer capture** no canvas. | `placement.js` | arraste sem `pointermove`, com `pointermove`, e `pointercancel` — todos comitam, sem drag pendurado |
+| 3 | Power-ups sem feedback | Botão indisponível **continua tocável** (removido `pointer-events:none`) e explica o porquê: *"Energia insuficiente: Sonar custa ⚡2 (você tem ⚡1)"*. Dica ao selecionar cada power-up ("Toque no tabuleiro para mirar…"). | `css/style.css`, `main.js` | toast de energia + dicas confirmados |
+| 4 | `pointertap` frágil pra atirar | Trocado por `pointerdown`+`pointerup` com tolerância de movimento (~1.2 célula) e `hitArea` explícito (polígono do tabuleiro). | `gfx/board.js` | toque sintético registra tiro/mira de forma confiável |
+| 5 | Painel cobre o topo do tabuleiro | `#placement-header` → `pointer-events:none` (é só texto). | `css/style.css` | `pointerEvents:none` confirmado; navio da linha 0 fica pegável |
+| 6 | Deadlock de animação congela o tabuleiro | `Promise.race([coreografia, timeout(5 s)])` + reset de `animating` no `finally`. | `main.js` | board nunca fica preso; taps voltam após a animação |
+| 7 | `clientId` compartilhado entre abas | `?p=<n>` cria um `clientId` separado por aba (testar 2 jogadores numa máquina). | `net.js` | usado nos testes (`?p=match2` etc.) |
+
+**Bônus de jogabilidade:** os 6 power-ups passaram de uma **fileira rolável** (botões da
+direita inalcançáveis sob `touch-action:none`) para uma **grade de 6 colunas** — todos
+visíveis e tocáveis sem rolar (alvos de 54×77 px no 390 px de largura).
+
+### Rodada 2 — bugs encontrados testando em aparelho real (2 celulares)
+
+Reproduzidos num viewport real de celular (360×800, DPR 3, toque emulado) e corrigidos:
+
+| # | Bug | Causa raiz | Correção | Verificado |
+|---|-----|-----------|----------|:--:|
+| 9 | **"Só consigo mirar em alguns campos da linha 10" (P1)** — taps falham nas linhas de cima depois que navios começam a queimar | O **filtro de calor (DisplacementFilter) na `fxLayer`** passa a participar do hit-testing quando ativo e **engole os toques** destinados ao tabuleiro embaixo. Ativa quando há célula em chamas (full quality). | Camadas decorativas (`oceanLayer`/`fxLayer`/`topLayer`) marcadas `eventMode='none'` — nunca entram no hit-testing, com ou sem filtro. | round-trip **100/100** em todas as 10 linhas, full quality + calor ATIVO; 4 tiros reais na linha de cima acertam; 0 erros |
+| 10 | **Mensagem "Posicione sua frota" cobre o porta-aviões** (linha 0), impedindo reposicionar | O painel ficava sobre o topo do tabuleiro. `pointer-events:none` (bug #5) deixava passar o toque, mas o painel **continuava cobrindo** o navio. Um inset FIXO clareava no emulador mas **não no celular** (entalhe/safe-area + texto da dica quebrando em 2 linhas deixam o painel mais alto). | O tabuleiro agora **mede o painel real** (`getBoundingClientRect`) e começa logo abaixo dele em qualquer aparelho (`scene._placementTopInset`). | mobile 360/320 px: margem de 31–47 px entre painel e tabuleiro (`boardClearsPanel`); confirmado visualmente |
+| 11 | **Navios não pegam ao arrastar** (porta-aviões some) | A textura 2.5D do navio é alta e deslocada; o `containsPoint` do sprite não cobre a célula da quilha, então o toque caía no tabuleiro em vez do navio. | Arrastar passou a ser **por célula**: o pointerdown no tabuleiro acha o navio que ocupa a célula e o agarra (mapeamento de célula é exato, 100/100). | mobile: porta-aviões agarrado na linha 0 e movido para a linha 3 |
+| 12 | **Revanche: pontos do tabuleiro anterior ficam na tela** | Ao reiniciar para o posicionamento, o tabuleiro não re-renderiza (não há `render` no posicionamento) e só os navios eram limpos — os **marcadores de acerto/água/sonar e células em chamas** da partida anterior continuavam na camada. | Novo `board.clearMarkers()` (limpa `markerLayer`/`overlayLayer`/queimando/retículo), chamado para os DOIS tabuleiros em `setPhaseView('placement')`. | injetados 3 marcas + chama nos 2 tabuleiros → após a transição de posicionamento: **0 marcas, 0 overlay, 0 chama** |
+
+Mais robustez de mobile aplicada junto: `Cache-Control: no-store` no cliente (um *reload* sempre traz o código novo — um celular podia estar num build ANTIGO em cache), relayout no `visualViewport` (barra de endereço do mobile), e `pointercancel` tratado também no tap do tabuleiro.

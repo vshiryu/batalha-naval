@@ -21,9 +21,12 @@ export class PlacementController {
     this.drag = null;
     this.active = false;
     this._bound = {
+      down: (e) => this._onBoardDown(e),
       move: (e) => this._onMove(e),
       up: (e) => this._onUp(e),
+      cancel: () => this._onCancel(),
     };
+    this._captured = null;
   }
 
   _defaultLayout() {
@@ -40,17 +43,31 @@ export class PlacementController {
     for (const p of this.placements) this._makeSprite(p);
     this._refreshAll();
     const stage = this.scene.stage.app.stage;
+    // Grab ships by CELL, not by sprite. The board is a single tap surface whose
+    // cell mapping is exact; the 2.5D ship sprites have tall, offset texture bounds
+    // that don't reliably cover their footprint cell, so per-sprite hit-testing let
+    // taps fall through to the board and a ship (e.g. the carrier) wouldn't pick up.
+    this.board.container.on('pointerdown', this._bound.down);
     stage.on('pointermove', this._bound.move);
     stage.on('pointerup', this._bound.up);
     stage.on('pointerupoutside', this._bound.up);
+    // iOS may fire pointercancel mid-gesture; PixiJS doesn't surface it, so listen
+    // at the DOM level to end a drag cleanly instead of leaving it dangling.
+    const view = this.scene.stage.app.view;
+    if (view && view.addEventListener) view.addEventListener('pointercancel', this._bound.cancel);
   }
 
   exit() {
     this.active = false;
+    this._releaseCapture();
+    this.drag = null;
     const stage = this.scene.stage.app.stage;
+    this.board.container.off('pointerdown', this._bound.down);
     stage.off('pointermove', this._bound.move);
     stage.off('pointerup', this._bound.up);
     stage.off('pointerupoutside', this._bound.up);
+    const view = this.scene.stage.app.view;
+    if (view && view.removeEventListener) view.removeEventListener('pointercancel', this._bound.cancel);
     this.board.clearAim();
     for (const [, sc] of this.sprites) this.board.shipLayer.removeChild(sc);
     this.sprites.clear();
@@ -58,13 +75,17 @@ export class PlacementController {
   }
 
   _makeSprite(p) {
+    // Purely visual — grabbing is handled at the board/cell level (see _onBoardDown).
     const sc = makeShip(p.id, p.size, this.board.cell);
-    sc.eventMode = 'static';
-    sc.cursor = 'grab';
-    sc.on('pointerdown', (e) => this._onDown(p.id, e));
     this.board.shipLayer.addChild(sc);
     this.sprites.set(p.id, sc);
     return sc;
+  }
+
+  // Which placed ship (if any) covers a board cell.
+  _shipAtCell(cell) {
+    return this.placements.find((p) => this._cellsFor(p.r, p.c, p.orientation, p.size)
+      .some((c) => c.r === cell.r && c.c === cell.c));
   }
 
   _cellsFor(r0, c0, orientation, size) {
@@ -113,57 +134,113 @@ export class PlacementController {
     for (const [id, sc] of this.sprites) { const f = id === this.selected ? 1.08 : 1; sc.scale.set((sc.baseScaleX || 1) * f, (sc.baseScaleY || 1) * f); }
   }
 
-  _onDown(id, e) {
-    if (!this.active) return;
+  // Pointer capture routes ALL subsequent move/up/cancel events for this pointer to
+  // the canvas, so a drag keeps tracking even if the finger outruns the sprite.
+  _capture(e) {
+    const view = this.scene.stage.app.view;
+    const id = e && e.pointerId;
+    if (view && view.setPointerCapture && id != null) {
+      try { view.setPointerCapture(id); this._captured = id; } catch (_e) { /* ignore */ }
+    }
+  }
+
+  _releaseCapture() {
+    const view = this.scene.stage.app.view;
+    if (view && view.releasePointerCapture && this._captured != null) {
+      try { view.releasePointerCapture(this._captured); } catch (_e) { /* ignore */ }
+    }
+    this._captured = null;
+  }
+
+  // Snap a board-local point to a clamped, validated candidate placement.
+  _candidateFromLocal(p, lp) {
+    const cell = this.board.localToCell(lp.x, lp.y);
+    if (!cell) return null;
+    let r0 = cell.r - this.drag.dr;
+    let c0 = cell.c - this.drag.dc;
+    if (p.orientation === 'h') { c0 = Math.max(0, Math.min(this.N - p.size, c0)); r0 = Math.max(0, Math.min(this.N - 1, r0)); }
+    else { r0 = Math.max(0, Math.min(this.N - p.size, r0)); c0 = Math.max(0, Math.min(this.N - 1, c0)); }
+    return { r0, c0, valid: this._isValid(p.id, r0, c0, p.orientation, p.size) };
+  }
+
+  _applyDragSprite(p, r0, c0) {
+    const cc = this.board.shipTransform(r0, c0, p.orientation, p.size);
+    const sc = this.sprites.get(p.id);
+    if (!sc) return;
+    if (sc.applyOrientation) sc.applyOrientation(p.orientation);
+    const S = cc.scale, sy = S * Math.sqrt(1 + cc.m * cc.m), sk = Math.atan(cc.m);
+    sc.x = cc.x; sc.y = cc.y; sc.rotation = 0; sc.skew.set(sk, 0);
+    sc.baseScale = S; sc.baseScaleX = S; sc.baseScaleY = sy; sc.baseSkew = sk;
+    sc.scale.set(S * 1.14, sy * 1.14);
+  }
+
+  // Pointerdown anywhere on the board: if it lands on a ship's footprint, grab it.
+  _onBoardDown(e) {
+    if (!this.active || this.drag) return;
+    const lp = e.getLocalPosition(this.board.container);
+    const cell = this.board.localToCell(lp.x, lp.y);
+    if (!cell) return;
+    const p = this._shipAtCell(cell);
+    if (!p) return; // tapped open water — nothing to grab
+    this._beginDrag(p.id, cell, e);
+  }
+
+  _beginDrag(id, grabCell, e) {
     this.selected = id;
     const p = this.placements.find((x) => x.id === id);
-    const lp = e.getLocalPosition(this.board.container);
-    const grabCell = this.board.localToCell(lp.x, lp.y) || { r: p.r, c: p.c };
-    this.drag = { id, dr: grabCell.r - p.r, dc: grabCell.c - p.c, last: { r: p.r, c: p.c } };
+    // dr/dc = where on the ship it was grabbed, so it tracks the finger naturally.
+    // Seed candidate with the CURRENT (valid) position so a release with no
+    // pointermove in between commits where the ship already is — never reverts.
+    this.drag = { id, dr: grabCell.r - p.r, dc: grabCell.c - p.c, candidate: { r0: p.r, c0: p.c, valid: true } };
+    this._capture(e);
     const sc = this.sprites.get(id);
     if (sc) { sc.scale.set((sc.baseScaleX || 1) * 1.14, (sc.baseScaleY || 1) * 1.14); if (sc.shadow) sc.shadow.alpha = 0.6; }
     this.audio && this.audio.uiClick();
     this._highlightSelected();
-    e.stopPropagation && e.stopPropagation();
   }
 
   _onMove(e) {
     if (!this.drag) return;
     const p = this.placements.find((x) => x.id === this.drag.id);
     const lp = e.getLocalPosition(this.board.container);
-    const cell = this.board.localToCell(lp.x, lp.y);
-    if (!cell) return;
-    let r0 = cell.r - this.drag.dr;
-    let c0 = cell.c - this.drag.dc;
-    // clamp to bounds
-    if (p.orientation === 'h') c0 = Math.max(0, Math.min(this.N - p.size, c0)), r0 = Math.max(0, Math.min(this.N - 1, r0));
-    else r0 = Math.max(0, Math.min(this.N - p.size, r0)), c0 = Math.max(0, Math.min(this.N - 1, c0));
-    const cells = this._cellsFor(r0, c0, p.orientation, p.size);
-    const valid = this._isValid(p.id, r0, c0, p.orientation, p.size);
-    this.drag.candidate = { r0, c0, valid };
-    // move sprite to snapped center, show ghost
-    const cc = this.board.shipTransform(r0, c0, p.orientation, p.size);
-    const sc = this.sprites.get(p.id);
-    if (sc) {
-      if (sc.applyOrientation) sc.applyOrientation(p.orientation);
-      const S = cc.scale, sy = S * Math.sqrt(1 + cc.m * cc.m), sk = Math.atan(cc.m);
-      sc.x = cc.x; sc.y = cc.y; sc.rotation = 0; sc.skew.set(sk, 0);
-      sc.baseScale = S; sc.baseScaleX = S; sc.baseScaleY = sy; sc.baseSkew = sk;
-      sc.scale.set(S * 1.14, sy * 1.14);
-    }
-    this.board.setAim(cells, valid ? 'valid' : 'invalid');
+    const cand = this._candidateFromLocal(p, lp);
+    if (!cand) return;
+    this.drag.candidate = cand;
+    this._applyDragSprite(p, cand.r0, cand.c0);
+    this.board.setAim(this._cellsFor(cand.r0, cand.c0, p.orientation, p.size), cand.valid ? 'valid' : 'invalid');
   }
 
-  _onUp() {
+  _onUp(e) {
     if (!this.drag) return;
     const p = this.placements.find((x) => x.id === this.drag.id);
-    const cand = this.drag.candidate;
+    // Prefer the actual RELEASE position. This is the core fix: if pointermove
+    // events were dropped (jank) the candidate would be stale/initial and the ship
+    // would snap back — recomputing from the release point commits where it landed.
+    let cand = this.drag.candidate;
+    if (e && typeof e.getLocalPosition === 'function') {
+      const lp = e.getLocalPosition(this.board.container);
+      const fromUp = this._candidateFromLocal(p, lp);
+      if (fromUp) cand = fromUp; // null only when released off-board → keep last candidate
+    }
+    this._releaseCapture();
     const sc = this.sprites.get(this.drag.id);
     if (sc) { sc.scale.set((sc.baseScaleX || 1) * 1.06, (sc.baseScaleY || 1) * 1.06); if (sc.shadow) sc.shadow.alpha = 0.4; }
     if (cand && cand.valid) {
       p.r = cand.r0; p.c = cand.c0;
       this.audio && this.audio.place();
     }
+    this.drag = null;
+    this._refreshAll();
+  }
+
+  _onCancel() {
+    if (!this.drag) return;
+    // pointercancel gives no usable position — commit the best-effort candidate
+    // (last valid spot under the finger) and never leave a dangling drag.
+    const p = this.placements.find((x) => x.id === this.drag.id);
+    const cand = this.drag.candidate;
+    this._releaseCapture();
+    if (cand && cand.valid) { p.r = cand.r0; p.c = cand.c0; }
     this.drag = null;
     this._refreshAll();
   }

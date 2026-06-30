@@ -58,17 +58,59 @@ export class Scene {
   // --------------------------------------------------------------- layout
   _regions() {
     const W = this.stage.width, H = this.stage.height;
-    // Big board sits in the central band; mini board tucks into the top-right.
-    const topUI = H * 0.135, bottomUI = H * 0.30;
+    const gap = 10;
+    if (this.phase === 'placement') {
+      // MEASURE the real "Posicione sua frota" panel and start the board just below
+      // it (a fixed inset can't account for a notch/safe-area or the hint wrapping).
+      const topUI = this._placementTopInset();
+      const bottomUI = H * 0.30;
+      const availH = H - topUI - bottomUI;
+      const big = Math.min(W * 0.9, availH * 0.98);
+      const mini = Math.min(W * 0.32, 150); // hidden during placement
+      return {
+        big: { x: (W - big) / 2, y: topUI + (availH - big) / 2, size: big },
+        mini: { x: W - mini - 12, y: topUI * 0.2 + 8, size: mini },
+      };
+    }
+    // Battle/lobby: reserve a band right below the top bar for the mini own board so
+    // the top bar's enemy-fleet pips never sit on top of it. On phones the big board
+    // is width-limited, so this lowers it without (much) shrinking it.
+    const hudBottom = this._topBarBottom();
+    const mini = Math.min(W * 0.26, 112);
+    const topUI = hudBottom + gap + mini + gap;
+    const bottomUI = H * 0.30;
     const availH = H - topUI - bottomUI;
     const big = Math.min(W * 0.9, availH * 0.98);
-    const bigX = (W - big) / 2;
-    const bigY = topUI + (availH - big) / 2;
-    const mini = Math.min(W * 0.32, 150);
     return {
-      big: { x: bigX, y: bigY, size: big },
-      mini: { x: W - mini - 12, y: topUI * 0.2 + 8, size: mini },
+      big: { x: (W - big) / 2, y: topUI + (availH - big) / 2, size: big },
+      mini: { x: W - mini - 12, y: hudBottom + gap, size: mini },
     };
+  }
+
+  // Bottom edge (stage px) of the placement instruction panel, so the board starts
+  // below it on ANY device. Falls back to a height-based reserve if not measurable.
+  _placementTopInset() {
+    const H = this.stage.height;
+    return this._measureBottom('placement-header', H * 0.135 + Math.min(124, Math.max(96, H * 0.12)), H * 0.135);
+  }
+
+  // Bottom edge (stage px) of the top bar (notch/safe-area aware).
+  _topBarBottom() {
+    const H = this.stage.height;
+    return this._measureBottom('topbar', H * 0.135, H * 0.135);
+  }
+
+  _measureBottom(elId, fallback, floor) {
+    try {
+      const el = (typeof document !== 'undefined') && document.getElementById(elId);
+      const view = this.stage.app && this.stage.app.view;
+      if (el && view && view.getBoundingClientRect) {
+        const r = el.getBoundingClientRect();
+        const canvasTop = view.getBoundingClientRect().top;
+        if (r.height > 0) return Math.max(floor, r.bottom - canvasTop);
+      }
+    } catch (_e) { /* fall through */ }
+    return fallback;
   }
 
   layout() {
@@ -88,8 +130,20 @@ export class Scene {
 
   setPhaseView(phase) {
     this.phase = phase;
-    if (phase === 'placement') this.focus = 'own';
-    else if (this.focus !== 'own-peek') this.focus = 'enemy';
+    if (phase === 'placement') {
+      this.focus = 'own';
+      // Rematch resets to placement: wipe the previous match's markers, wrecks,
+      // fire and overlays from BOTH boards, or they bleed through onto the fresh
+      // placement board (leftover dots on the grid). Own-board ships are then
+      // rebuilt by the PlacementController.
+      for (const b of [this.enemyBoard, this.ownBoard]) {
+        if (!b) continue;
+        b.clearMarkers();
+        b.clearShips();
+      }
+    } else if (this.focus !== 'own-peek') {
+      this.focus = 'enemy';
+    }
     if (this.ownBoard) {
       this.ownBoard.clearAim && this.ownBoard.clearAim();
     }
